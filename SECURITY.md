@@ -23,9 +23,13 @@ All sensitive credentials are stored as **Cloudflare environment secrets**, encr
 | `DISCORD_CLIENT_ID` | OAuth2 application ID (optional, for dashboard login) |
 | `DISCORD_CLIENT_SECRET` | OAuth2 client secret (optional, for dashboard login) |
 | `ADMIN_DISCORD_ID` | Admin user identification (optional) |
-| `DASHBOARD_TOKEN` | API write access token (optional) |
+| `DASHBOARD_TOKEN` | API write access token — **also gates the MCP transports (`/mcp`, `/sse`). Set it in production.** |
 
 > **What this means:** Even though this repo is public, your credentials are safe. They live in Cloudflare's encrypted secret store, not in the code.
+
+### ⚠️ Set `DASHBOARD_TOKEN` — it gates the MCP endpoints
+
+`/mcp` and `/sse` expose the full companion tool surface: **posting into your Discord as any companion identity, reading pending commands, managing the bot.** They require `DASHBOARD_TOKEN` — send it as `Authorization: Bearer <DASHBOARD_TOKEN>` (or `?k=<DASHBOARD_TOKEN>` for headerless clients). The gate is enforced **only when `DASHBOARD_TOKEN` is set**, so a fresh clone isn't locked out before you configure it — but an unset token leaves `/mcp` and `/sse` **open to anyone who learns the worker URL**, which leaks easily (screenshots, chat logs). Set it, and update your MCP client to send it, in the same change.
 
 ### Session-Based Authentication
 

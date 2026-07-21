@@ -3267,6 +3267,26 @@ export default {
       return res;
     }
 
+    // ── MCP transport auth ───────────────────────────────────────────────
+    // /sse + /mcp expose the full companion tool surface — post into Discord as
+    // ANY companion identity, read pending commands, manage the bot. They were
+    // falling through unauthenticated while /trigger and /pending were gated.
+    // Require the same DASHBOARD_TOKEN (Bearer, or ?k=/?key= for headerless
+    // clients). Enforced only when the token is set, so a fresh clone isn't
+    // locked out before you configure it — but set it, or anyone with the worker
+    // URL owns your bot.
+    if (url.pathname === '/sse' || url.pathname === '/sse/message' || url.pathname === '/mcp') {
+      if (env.DASHBOARD_TOKEN) {
+        const auth = request.headers.get('Authorization');
+        const qk = url.searchParams.get('k') || url.searchParams.get('key');
+        if (auth !== `Bearer ${env.DASHBOARD_TOKEN}` && qk !== env.DASHBOARD_TOKEN) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            status: 401, headers: { 'Content-Type': 'application/json', ...corsHeaders },
+          });
+        }
+      }
+    }
+
     // SSE endpoint
     if (url.pathname === '/sse' || url.pathname === '/sse/message') {
       return CompanionBot.serveSSE('/sse', { binding: 'COMPANION_BOT' }).fetch(request, env, ctx);
