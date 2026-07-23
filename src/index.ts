@@ -40,17 +40,44 @@ interface PendingCommand {
   timestamp: number;
 }
 
-// Helper: Discord API request with bot token
+// Bounded fetch: aborts after `ms` so a stalled Discord call fails LOUD (an honest error)
+// instead of hanging the tool forever. Fixes the silent mid-session read freeze — a dead
+// upstream should say so, not leave the caller waiting. The timer is always cleared so a
+// fast response never leaks a pending abort.
+async function fetchWithTimeout(url: string, options: RequestInit = {}, ms = 10000): Promise<Response> {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms);
+  try {
+    return await fetch(url, { ...options, signal: ac.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Helper: Discord API request with bot token. Bounded by fetchWithTimeout so a hung Discord
+// call returns { error, status: 504 } instead of freezing the read tool indefinitely.
 async function discordRequest(env: Env, endpoint: string, options: RequestInit = {}): Promise<any> {
   const url = `${DISCORD_API}${endpoint}`;
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bot ${env.DISCORD_TOKEN}`,
-      ...(options.headers || {}),
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(url, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bot ${env.DISCORD_TOKEN}`,
+        ...(options.headers || {}),
+      },
+    });
+  } catch (e: any) {
+    const timedOut = e?.name === 'AbortError';
+    return {
+      error: true,
+      status: timedOut ? 504 : 502,
+      message: timedOut
+        ? 'Discord request timed out after 10s (aborted to avoid a silent hang)'
+        : `Discord request failed: ${e?.message || String(e)}`,
+    };
+  }
 
   if (!response.ok) {
     const text = await response.text();
