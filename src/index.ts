@@ -137,6 +137,37 @@ function splitMessage(content: string, maxLength: number = 2000): string[] {
 
 // ========== Durable Object: CompanionBot ==========
 
+/**
+ * Resolve which webhook to act through: explicit > per-channel > global fallback.
+ *
+ * A Discord webhook can only edit or delete messages IT sent. `send_as_companion`
+ * resolves a per-channel webhook from channelId, but `edit_message` and
+ * `delete_message` used to go straight to env.WEBHOOK_URL — so any message posted
+ * the normal way could never afterwards be edited. Discord answers
+ * 404 "10008 Unknown Message", which reads as "that message is gone" rather than
+ * "the wrong webhook is asking", so the error points away from its own cause.
+ */
+async function resolveCompanionWebhook(
+  stub: { fetch: (req: Request) => Promise<Response> },
+  env: Env,
+  channelId?: string,
+  webhookUrl?: string,
+): Promise<string | null> {
+  if (webhookUrl) return webhookUrl;
+  if (channelId) {
+    const resolved = await stub.fetch(
+      new Request(`https://internal/api/channel-webhook/${channelId}`),
+    );
+    if (resolved.ok) {
+      const data = (await resolved.json()) as any;
+      if (typeof data.webhook_url === 'string' && data.webhook_url) {
+        return data.webhook_url;
+      }
+    }
+  }
+  return env.WEBHOOK_URL || null;
+}
+
 export class CompanionBot extends McpAgent<Env> {
   server = new McpServer({
     name: "discord-companion-bot",
@@ -2080,9 +2111,9 @@ export class CompanionBot extends McpAgent<Env> {
             if (!messageId || !newContent) {
               return { content: [{ type: "text" as const, text: "messageId and newContent are required for 'edit_message' action" }] };
             }
-            const targetUrl = webhookUrl || this.env.WEBHOOK_URL;
+            const targetUrl = await resolveCompanionWebhook(stub, this.env, channelId, webhookUrl);
             if (!targetUrl) {
-              return { content: [{ type: "text" as const, text: "No webhook URL provided or configured" }] };
+              return { content: [{ type: "text" as const, text: "No webhook URL available. Provide channelId or webhookUrl." }] };
             }
             const res = await fetch(`${targetUrl}/messages/${messageId}`, {
               method: 'PATCH',
@@ -2091,7 +2122,10 @@ export class CompanionBot extends McpAgent<Env> {
             });
             if (!res.ok) {
               const errText = await res.text();
-              return { content: [{ type: "text" as const, text: `Edit failed (${res.status}): ${errText}` }] };
+              const hint = res.status === 404 && !channelId
+                ? " — pass channelId so the sending webhook is resolved; a webhook can only edit its own messages"
+                : "";
+              return { content: [{ type: "text" as const, text: `Edit failed (${res.status}): ${errText}${hint}` }] };
             }
             return { content: [{ type: "text" as const, text: `Message ${messageId} edited.` }] };
           }
@@ -2100,14 +2134,17 @@ export class CompanionBot extends McpAgent<Env> {
             if (!messageId) {
               return { content: [{ type: "text" as const, text: "messageId is required for 'delete_message' action" }] };
             }
-            const targetUrl = webhookUrl || this.env.WEBHOOK_URL;
+            const targetUrl = await resolveCompanionWebhook(stub, this.env, channelId, webhookUrl);
             if (!targetUrl) {
-              return { content: [{ type: "text" as const, text: "No webhook URL provided or configured" }] };
+              return { content: [{ type: "text" as const, text: "No webhook URL available. Provide channelId or webhookUrl." }] };
             }
             const res = await fetch(`${targetUrl}/messages/${messageId}`, { method: 'DELETE' });
             if (!res.ok) {
               const errText = await res.text();
-              return { content: [{ type: "text" as const, text: `Delete failed (${res.status}): ${errText}` }] };
+              const hint = res.status === 404 && !channelId
+                ? " — pass channelId so the sending webhook is resolved; a webhook can only delete its own messages"
+                : "";
+              return { content: [{ type: "text" as const, text: `Delete failed (${res.status}): ${errText}${hint}` }] };
             }
             return { content: [{ type: "text" as const, text: `Message ${messageId} deleted.` }] };
           }
